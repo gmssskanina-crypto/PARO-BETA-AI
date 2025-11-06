@@ -1,15 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Difficulty } from '../types';
 
 interface MCQFormProps {
   onGenerate: (topic: string, numQuestions: number, difficulty: Difficulty) => void;
   isLoading: boolean;
+  initialTopic?: string;
 }
 
-const MCQForm: React.FC<MCQFormProps> = ({ onGenerate, isLoading }) => {
+const MCQForm: React.FC<MCQFormProps> = ({ onGenerate, isLoading, initialTopic }) => {
   const [topic, setTopic] = useState<string>('Capacitance');
   const [numQuestions, setNumQuestions] = useState<number>(5);
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.Medium);
+
+  useEffect(() => {
+    if (initialTopic) {
+      setTopic(initialTopic);
+    }
+  }, [initialTopic]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
