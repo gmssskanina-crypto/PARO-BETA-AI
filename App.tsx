@@ -8,11 +8,13 @@ import Loader from './components/Loader';
 import ErrorMessage from './components/ErrorMessage';
 import AITutor from './components/AITutor';
 import ResourceGrid from './components/ResourceGrid';
+import ViewToggle from './components/ViewToggle';
 
 const App: React.FC = () => {
   const [mcqs, setMcqs] = useState<MCQ[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<'mcq' | 'tutor'>('mcq');
 
   const handleGenerate = useCallback(async (topic: string, numQuestions: number, difficulty: Difficulty) => {
     setIsLoading(true);
@@ -38,14 +40,18 @@ const App: React.FC = () => {
       <div className="max-w-4xl mx-auto">
         <Header />
         <main className="mt-8 space-y-12">
-          <section id="mcq-generator">
-            <MCQForm onGenerate={handleGenerate} isLoading={isLoading} />
-            {isLoading && <Loader />}
-            {error && <ErrorMessage message={error} />}
-            {mcqs.length > 0 && !isLoading && <MCQList mcqs={mcqs} />}
-          </section>
+          <ViewToggle activeView={activeView} setActiveView={setActiveView} />
           
-          <AITutor />
+          {activeView === 'mcq' ? (
+            <section id="mcq-generator">
+              <MCQForm onGenerate={handleGenerate} isLoading={isLoading} />
+              {isLoading && <Loader />}
+              {error && <ErrorMessage message={error} />}
+              {mcqs.length > 0 && !isLoading && <MCQList mcqs={mcqs} />}
+            </section>
+          ) : (
+            <AITutor />
+          )}
 
           <ResourceGrid />
         </main>
