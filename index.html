@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="UTF-g" />
+    <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paro AI Study Hub</title>
@@ -37,16 +37,371 @@
   <script type="importmap">
 {
   "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "@google/genai": "https://esm.sh/@google/genai",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/"
   }
 }
 </script>
 </head>
   <body class="bg-gray-900">
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
+    <script type="module">
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import ReactDOM from 'react-dom/client';
+import { GoogleGenAI, Type } from "@google/genai";
+
+// --- TYPES ---
+var Difficulty;
+(function (Difficulty) {
+    Difficulty["Easy"] = "Easy";
+    Difficulty["Medium"] = "Medium";
+    Difficulty["Hard"] = "Hard";
+})(Difficulty || (Difficulty = {}));
+
+// --- GEMINI SERVICE ---
+const API_KEY = process.env.API_KEY;
+
+if (!API_KEY) {
+  // A simple error message for the user if the API key is missing.
+  const rootElement = document.getElementById('root');
+  if (rootElement) {
+    rootElement.innerHTML = `<div style="color: white; text-align: center; padding: 2rem;">API_KEY is not configured. Please add it to the environment variables.</div>`;
+  }
+  throw new Error("API_KEY environment variable not set");
+}
+
+const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+const generateMCQs = async (topic, numQuestions, difficulty) => {
+  const model = 'gemini-2.5-flash';
+  const prompt = `
+    Generate ${numQuestions} multiple-choice questions on the topic of "${topic}" with a ${difficulty} difficulty level.
+    For each question, provide exactly 4 options.
+    For each question, indicate the correct answer.
+    For each question, provide a brief explanation for why the answer is correct.
+    Return the response as a valid JSON array.
+  `;
+
+  const mcqSchema = {
+    type: Type.OBJECT,
+    properties: {
+      question: { type: Type.STRING, description: "The question text." },
+      options: { type: Type.ARRAY, items: { type: Type.STRING }, description: "An array of 4 possible answers." },
+      correctAnswer: { type: Type.STRING, description: "The correct answer from the options array." },
+      explanation: { type: Type.STRING, description: "A brief explanation for the correct answer." }
+    },
+    required: ["question", "options", "correctAnswer", "explanation"]
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: { type: Type.ARRAY, items: mcqSchema },
+      },
+    });
+    const jsonText = response.text.trim();
+    const parsedJson = JSON.parse(jsonText);
+    if (Array.isArray(parsedJson) && parsedJson.every(item => 'question' in item && 'options' in item && 'correctAnswer' in item)) {
+        return parsedJson;
+    } else {
+        throw new Error("Invalid JSON format received from API.");
+    }
+  } catch (error) {
+    console.error("Error generating MCQs:", error);
+    throw new Error(error instanceof Error ? `Failed to generate MCQs: ${error.message}` : "An unknown error occurred while generating MCQs.");
+  }
+};
+
+const getTutorResponse = async (prompt) => {
+  const model = 'gemini-2.5-flash';
+  const fullPrompt = `You are Paro AI, a knowledgeable and friendly tutor for a Class 12 student. The user asked: "${prompt}". Provide a concise, helpful answer to teach the concept clearly. Use an example if it helps. Keep the response under 150 words. Format important terms with markdown for bolding (**term**).`;
+  try {
+    const response = await ai.models.generateContent({ model: model, contents: fullPrompt });
+    return response.text;
+  } catch (error) {
+    console.error("Error getting tutor response:", error);
+    throw new Error(error instanceof Error ? `AI Tutor failed to respond: ${error.message}` : "An unknown error occurred while contacting the AI Tutor.");
+  }
+};
+
+
+// --- COMPONENTS ---
+
+const Header = () => React.createElement('header', { className: 'text-center animate-fade-in' },
+    React.createElement('h1', { className: 'text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-brand-primary to-brand-secondary text-transparent bg-clip-text' },
+        'Class 12 Study with Paro AI'
+    ),
+    React.createElement('p', { className: 'mt-3 text-lg text-gray-400' },
+        'Generate MCQs, search for resources, and get help from your AI tutor.'
+    )
+);
+
+const Loader = () => React.createElement('div', { className: 'flex justify-center items-center py-10', 'aria-label': 'Loading content' },
+    React.createElement('svg', { className: 'animate-spin h-8 w-8 text-brand-primary', xmlns: 'http://www.w3.org/2000/svg', fill: 'none', viewBox: '0 0 24 24' },
+        React.createElement('circle', { className: 'opacity-25', cx: '12', cy: '12', r: '10', stroke: 'currentColor', strokeWidth: '4' }),
+        React.createElement('path', { className: 'opacity-75', fill: 'currentColor', d: 'M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z' })
+    ),
+    React.createElement('span', { className: 'ml-3 text-gray-400' }, 'Generating your quiz...')
+);
+
+const ErrorMessage = ({ message }) => React.createElement('div', { className: 'mt-6 bg-red-500/10 border border-red-500/30 text-red-300 px-4 py-3 rounded-lg animate-fade-in', role: 'alert' },
+    React.createElement('strong', { className: 'font-bold' }, 'Oops! '),
+    React.createElement('span', { className: 'block sm:inline' }, message)
+);
+
+const CheckIcon = () => React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5 mr-2', viewBox: '0 0 20 20', fill: 'currentColor' },
+    React.createElement('path', { fillRule: 'evenodd', d: 'M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z', clipRule: 'evenodd' })
+);
+
+const CrossIcon = () => React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5 mr-2', viewBox: '0 0 20 20', fill: 'currentColor' },
+    React.createElement('path', { fillRule: 'evenodd', d: 'M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z', clipRule: 'evenodd' })
+);
+
+const MCQItem = ({ mcq, index }) => {
+  const [selectedOption, setSelectedOption] = useState(null);
+  const isAnswered = selectedOption !== null;
+
+  const getOptionClass = (option) => {
+    if (!isAnswered) return 'border-gray-600 bg-gray-700 hover:bg-gray-600 hover:border-brand-secondary';
+    if (option === mcq.correctAnswer) return 'border-green-500 bg-green-500/20 text-green-300';
+    if (option === selectedOption) return 'border-red-500 bg-red-500/20 text-red-300';
+    return 'border-gray-600 bg-gray-700 opacity-60';
+  };
+
+  const children = [
+      React.createElement('p', { key: 'q', className: 'font-semibold text-lg text-gray-200' },
+          React.createElement('span', { className: 'text-brand-primary font-bold mr-2' }, `${index + 1}.`),
+          mcq.question
+      ),
+      React.createElement('div', { key: 'opts', className: 'mt-4 space-y-3' },
+          mcq.options.map((option, i) =>
+              React.createElement('button', {
+                  key: i,
+                  onClick: () => setSelectedOption(option),
+                  disabled: isAnswered,
+                  className: `w-full text-left p-3 rounded-md border-2 transition-all duration-200 flex items-center ${getOptionClass(option)} ${!isAnswered ? 'cursor-pointer' : 'cursor-default'}`
+              },
+                  isAnswered && option === mcq.correctAnswer && React.createElement(CheckIcon),
+                  isAnswered && option === selectedOption && option !== mcq.correctAnswer && React.createElement(CrossIcon),
+                  React.createElement('span', { className: 'flex-1' }, option)
+              )
+          )
+      ),
+      isAnswered && React.createElement('div', { key: 'exp', className: 'mt-4 p-4 bg-gray-900/50 rounded-md border border-gray-700 animate-fade-in' },
+          React.createElement('p', { className: 'font-bold text-gray-300' }, 'Explanation:'),
+          React.createElement('p', { className: 'text-gray-400 mt-1' }, mcq.explanation)
+      )
+  ];
+  return React.createElement('div', { className: 'bg-gray-800/50 backdrop-blur-sm p-6 rounded-lg shadow-lg border border-gray-700 animate-slide-in', style: { animationDelay: `${index * 100}ms` } }, ...children);
+};
+
+const MCQList = ({ mcqs }) => React.createElement('div', { className: 'mt-10 space-y-6' },
+    React.createElement('h2', { className: 'text-2xl font-bold text-gray-200 border-b-2 border-gray-700 pb-2' }, 'Your Quiz is Ready!'),
+    ...mcqs.map((mcq, index) => React.createElement(MCQItem, { key: index, mcq: mcq, index: index }))
+);
+
+const MCQForm = ({ onGenerate, isLoading }) => {
+  const [topic, setTopic] = useState('Capacitance');
+  const [numQuestions, setNumQuestions] = useState(5);
+  const [difficulty, setDifficulty] = useState(Difficulty.Medium);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (topic.trim()) onGenerate(topic, numQuestions, difficulty);
+  };
+  
+  const handleGoogleSearch = () => {
+    if (topic.trim()) window.open(`https://www.google.com/search?q=${encodeURIComponent(topic)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleYoutubeSearch = () => {
+    if (topic.trim()) window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(topic)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  return React.createElement('div', { className: 'bg-gray-800/50 backdrop-blur-sm p-6 sm:p-8 rounded-2xl shadow-2xl border border-gray-700 animate-fade-in' },
+    React.createElement('form', { onSubmit: handleSubmit, className: 'space-y-6' },
+      React.createElement('div', null,
+        React.createElement('label', { htmlFor: 'topic', className: 'block text-sm font-medium text-gray-300 mb-2' }, 'Topic'),
+        React.createElement('input', { type: 'text', id: 'topic', value: topic, onChange: (e) => setTopic(e.target.value), className: 'w-full bg-gray-700 border border-gray-600 rounded-md py-2 px-4 text-white placeholder-gray-400 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary transition duration-200', placeholder: 'Enter a topic...', required: true })
+      ),
+      React.createElement('div', null,
+        React.createElement('label', { htmlFor: 'numQuestions', className: 'block text-sm font-medium text-gray-300 mb-2' }, 'Number of Questions: ', React.createElement('span', { className: 'font-bold text-brand-primary' }, numQuestions)),
+        React.createElement('input', { type: 'range', id: 'numQuestions', min: '1', max: '20', value: numQuestions, onChange: (e) => setNumQuestions(Number(e.target.value)), className: 'w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand-primary' })
+      ),
+      React.createElement('div', null,
+        React.createElement('label', { className: 'block text-sm font-medium text-gray-300 mb-2' }, 'Difficulty'),
+        React.createElement('div', { className: 'flex flex-wrap gap-2 sm:gap-4' },
+          ...Object.values(Difficulty).map((level) =>
+            React.createElement('div', { key: level },
+              React.createElement('input', { type: 'radio', id: level, name: 'difficulty', value: level, checked: difficulty === level, onChange: () => setDifficulty(level), className: 'sr-only' }),
+              React.createElement('label', { htmlFor: level, className: `cursor-pointer px-4 py-2 rounded-md text-sm font-semibold border-2 transition-all duration-200 ${difficulty === level ? 'bg-brand-primary border-brand-primary text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-brand-secondary'}` }, level)
+            )
+          )
+        )
+      ),
+      React.createElement('div', { className: 'pt-2 space-y-4' },
+        React.createElement('button', { type: 'submit', disabled: isLoading, className: 'w-full flex justify-center items-center bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-bold py-3 px-4 rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200' }, isLoading ? 'Generating...' : 'Generate MCQs'),
+        React.createElement('div', { className: 'flex flex-col sm:flex-row gap-4' },
+          React.createElement('button', { type: 'button', onClick: handleGoogleSearch, disabled: !topic.trim() || isLoading, className: 'w-full flex justify-center items-center bg-google text-white font-bold py-3 px-4 rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200' }, 'Search Google'),
+          React.createElement('button', { type: 'button', onClick: handleYoutubeSearch, disabled: !topic.trim() || isLoading, className: 'w-full flex justify-center items-center bg-youtube text-white font-bold py-3 px-4 rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200' }, 'Search YouTube')
+        )
+      )
+    )
+  );
+};
+
+const AITutor = () => {
+  const [messages, setMessages] = useState([{ role: 'model', content: "Hello! I'm Paro AI, created by Dharminder Sharma. What topic would you like to understand better?" }]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const chatContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (chatContainerRef.current) chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+  }, [messages]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+    const userMessage = { role: 'user', content: input };
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+    try {
+      const response = await getTutorResponse(input);
+      setMessages(prev => [...prev, { role: 'model', content: response }]);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Sorry, something went wrong.';
+      setMessages(prev => [...prev, { role: 'model', content: errorMessage }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const renderMessageContent = (content) => {
+    const parts = content.split(/\\*\\*(.*?)\\*\\*/g);
+    return React.createElement(React.Fragment, null, ...parts.map((part, i) => i % 2 === 1 ? React.createElement('strong', { key: i }, part) : part));
+  };
+
+  return React.createElement('div', { className: 'bg-gray-800/50 backdrop-blur-sm p-6 sm:p-8 rounded-2xl shadow-2xl border border-gray-700 animate-fade-in' },
+    React.createElement('h2', { className: 'text-3xl font-bold text-gray-200 border-b-2 border-gray-700 pb-3 mb-6' }, 'Paro AI Tutor'),
+    React.createElement('div', { ref: chatContainerRef, className: 'h-80 overflow-y-auto pr-4 space-y-4 mb-4' },
+      messages.map((msg, index) =>
+        React.createElement('div', { key: index, className: `flex animate-fade-in ${msg.role === 'user' ? 'justify-end' : 'justify-start'}` },
+          React.createElement('div', { className: `max-w-xs md:max-w-md lg:max-w-lg px-4 py-2 rounded-xl ${msg.role === 'user' ? 'bg-brand-primary text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}` },
+            React.createElement('p', { className: 'text-sm sm:text-base leading-relaxed' }, renderMessageContent(msg.content))
+          )
+        )
+      ),
+      isLoading && React.createElement('div', { className: 'flex justify-start' },
+        React.createElement('div', { className: 'px-4 py-2 rounded-xl bg-gray-700 text-gray-200 rounded-bl-none' },
+          React.createElement('div', { className: 'flex items-center space-x-2' },
+            React.createElement('span', { className: 'h-2 w-2 bg-gray-400 rounded-full animate-pulse [animation-delay:-0.3s]' }),
+            React.createElement('span', { className: 'h-2 w-2 bg-gray-400 rounded-full animate-pulse [animation-delay:-0.15s]' }),
+            React.createElement('span', { className: 'h-2 w-2 bg-gray-400 rounded-full animate-pulse' })
+          )
+        )
+      )
+    ),
+    React.createElement('form', { onSubmit: handleSubmit, className: 'flex gap-4' },
+      React.createElement('input', { type: 'text', value: input, onChange: (e) => setInput(e.target.value), placeholder: 'Ask me anything...', className: 'flex-grow bg-gray-700 border border-gray-600 rounded-full py-2 px-5 text-white placeholder-gray-400 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary transition duration-200', disabled: isLoading }),
+      React.createElement('button', { type: 'submit', disabled: isLoading || !input.trim(), className: 'bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-bold py-2 px-6 rounded-full hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200' }, 'Send')
+    )
+  );
+};
+
+const resources = [
+  { name: 'Physics', href: '#' }, { name: 'Chemistry', href: '#' }, { name: 'Biology', href: '#' }, { name: 'Mathematics', href: '#' },
+  { name: 'History', href: '#' }, { name: 'Political Science', href: '#' }, { name: 'Geography', href: '#' }, { name: 'Sociology', href: '#' },
+  { name: 'English', href: '#' }, { name: 'Hindi', href: '#' }, { name: 'Computer Science', href: '#' }, { name: 'IT', href: '#' }, { name: 'Fine Arts', href: '#' },
+  { name: 'Digital Board Notes', href: 'https://www.dropbox.com/scl/fo/rmv72f7gic0btnjru4h57/ABMJb0ZvsKUfiDfSWrmuN4s?rlkey=qgz1hnp5zo6i9s1oi0w1mbpfm&st=xpu1el3i&dl=0' },
+  { name: 'Sample Papers', href: 'https://cbseacademic.nic.in/SQP_CLASSXII_2024-25.html' },
+  { name: 'Previous Year Papers', href: 'https://www.cbse.gov.in/cbsenew/question-paper.html' },
+];
+
+const ResourceGrid = () => React.createElement('section', { className: 'animate-fade-in' },
+    React.createElement('h2', { className: 'text-3xl font-bold text-gray-200 border-b-2 border-gray-700 pb-3 mb-6' }, 'Study Resources'),
+    React.createElement('div', { className: 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4' },
+        ...resources.map((res) =>
+            React.createElement('a', {
+                key: res.name,
+                href: res.href,
+                target: '_blank',
+                rel: 'noopener noreferrer',
+                className: 'block p-4 bg-gray-800 rounded-lg text-center text-gray-300 font-semibold transition-all duration-300 hover:bg-brand-primary hover:text-white hover:scale-105 shadow-lg'
+            }, res.name)
+        )
+    )
+);
+
+const ViewToggle = ({ activeView, setActiveView }) => React.createElement('div', { className: 'flex justify-center mb-8' },
+    React.createElement('div', { className: 'bg-gray-800/50 border border-gray-700 rounded-full p-1 flex space-x-1' },
+        React.createElement('button', {
+            onClick: () => setActiveView('mcq'),
+            className: `px-6 py-2 rounded-full text-sm font-semibold transition-colors duration-300 ${activeView === 'mcq' ? 'bg-brand-primary text-white' : 'text-gray-400 hover:bg-gray-700/50'}`
+        }, 'MCQ Generator'),
+        React.createElement('button', {
+            onClick: () => setActiveView('tutor'),
+            className: `px-6 py-2 rounded-full text-sm font-semibold transition-colors duration-300 ${activeView === 'tutor' ? 'bg-brand-primary text-white' : 'text-gray-400 hover:bg-gray-700/50'}`
+        }, 'AI Tutor')
+    )
+);
+
+
+// --- APP ---
+const App = () => {
+  const [mcqs, setMcqs] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [activeView, setActiveView] = useState('mcq'); // 'mcq' or 'tutor'
+
+  const handleGenerate = useCallback(async (topic, numQuestions, difficulty) => {
+    setIsLoading(true);
+    setError(null);
+    setMcqs([]);
+    try {
+      const generatedMcqs = await generateMCQs(topic, numQuestions, difficulty);
+      setMcqs(generatedMcqs);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  return React.createElement('div', { className: 'min-h-screen bg-gray-900 text-gray-100 font-sans p-4 sm:p-6 lg:p-8' },
+    React.createElement('div', { className: 'max-w-4xl mx-auto' },
+      React.createElement(Header),
+      React.createElement('main', { className: 'mt-8 space-y-12' },
+        React.createElement(ViewToggle, { activeView: activeView, setActiveView: setActiveView }),
+        activeView === 'mcq'
+          ? React.createElement('section', { id: 'mcq-generator' },
+              React.createElement(MCQForm, { onGenerate: handleGenerate, isLoading: isLoading }),
+              isLoading && React.createElement(Loader),
+              error && React.createElement(ErrorMessage, { message: error }),
+              mcqs.length > 0 && !isLoading && React.createElement(MCQList, { mcqs: mcqs })
+            )
+          : React.createElement(AITutor),
+        React.createElement(ResourceGrid)
+      )
+    )
+  );
+};
+
+// --- RENDER ---
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+const root = ReactDOM.createRoot(rootElement);
+root.render(React.createElement(React.StrictMode, null, React.createElement(App, null)));
+
+    </script>
   </body>
 </html>

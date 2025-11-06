@@ -58,7 +58,7 @@ const MCQForm: React.FC<MCQFormProps> = ({ onGenerate, isLoading }) => {
             type="range"
             id="numQuestions"
             min="1"
-            max="10"
+            max="20"
             value={numQuestions}
             onChange={(e) => setNumQuestions(Number(e.target.value))}
             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand-primary"

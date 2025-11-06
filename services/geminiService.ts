@@ -81,3 +81,24 @@ export const generateMCQs = async (
     throw new Error("An unknown error occurred while generating MCQs.");
   }
 };
+
+export const getTutorResponse = async (prompt: string): Promise<string> => {
+  const model = 'gemini-2.5-flash';
+  
+  const fullPrompt = `You are Paro AI, a knowledgeable and friendly tutor for a Class 12 student. The user asked: "${prompt}". Provide a concise, helpful answer to teach the concept clearly. Use an example if it helps. Keep the response under 150 words. Format important terms with markdown for bolding (**term**).`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: fullPrompt,
+    });
+
+    return response.text;
+  } catch (error) {
+    console.error("Error getting tutor response:", error);
+    if (error instanceof Error) {
+        throw new Error(`AI Tutor failed to respond: ${error.message}`);
+    }
+    throw new Error("An unknown error occurred while contacting the AI Tutor.");
+  }
+};

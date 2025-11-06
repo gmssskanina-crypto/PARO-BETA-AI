@@ -10,3 +10,8 @@ export enum Difficulty {
     Medium = 'Medium',
     Hard = 'Hard'
 }
+
+export interface ChatMessage {
+  role: 'user' | 'model';
+  content: string;
+}
